@@ -76,6 +76,21 @@ export default function ContactsTable() {
     fetchContacts();
   }, [fetchContacts]);
 
+  useEffect(() => {
+    async function pollGmail() {
+      try {
+        await fetch('/api/gmail/poll');
+        await fetchContacts();
+      } catch {
+        // silent — polling errors shouldn't surface to the user
+      }
+    }
+
+    pollGmail();
+    const id = setInterval(pollGmail, 10 * 60 * 1000);
+    return () => clearInterval(id);
+  }, [fetchContacts]);
+
   async function updateStatus(id: number, status: string) {
     setSaving(id);
     await fetch(`/api/contacts/${id}`, {
