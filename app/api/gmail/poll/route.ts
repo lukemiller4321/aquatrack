@@ -1,6 +1,31 @@
 import { NextResponse } from 'next/server';
 import { google } from 'googleapis';
+import Anthropic from '@anthropic-ai/sdk';
 import { query } from '@/lib/db';
+
+async function isSwimSchoolInquiry(subject: string, body: string): Promise<boolean> {
+  try {
+    const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+    const response = await anthropic.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 10,
+      system: "You are a filter for a swim school's inbox. Determine if this email is a genuine inquiry about swim lessons, classes, pricing, schedules, enrollment, or general information about the swim school. Reply with only 'YES' or 'NO'.",
+      messages: [
+        {
+          role: 'user',
+          content: `Subject: ${subject}\n\n${body}`,
+        },
+      ],
+    });
+
+    const text = response.content[0].type === 'text' ? response.content[0].text.trim().toUpperCase() : '';
+    return text.startsWith('YES');
+  } catch (err) {
+    console.error('[gmail/poll] Anthropic filter error:', err);
+    // On error, default to inserting the contact so we don't silently drop leads
+    return true;
+  }
+}
 
 function getGmailClient() {
   const auth = new google.auth.OAuth2(
@@ -153,8 +178,14 @@ export async function GET() {
           [name, contact, notes, messageId]
         );
       } else {
-        // --- Regular inbound email ---
+        // --- Regular inbound email — filter with Anthropic before inserting ---
         const { name, email } = parseFrom(fromRaw);
+
+        const relevant = await isSwimSchoolInquiry(subject, body);
+        if (!relevant) {
+          console.log(`[gmail/poll] skipped (not swim inquiry): from="${fromRaw}" subject="${subject}"`);
+          continue;
+        }
 
         await query(
           `INSERT INTO contacts (name, contact, type, source, status, notes, gmail_message_id)
